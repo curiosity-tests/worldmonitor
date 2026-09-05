@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       leg:
-        description: "baseline (uninstrumented) or instrumented (under chalk/curiosity)"
+        description: baseline (uninstrumented) or instrumented (under chalk/curiosity)
         type: choice
         options: [instrumented, baseline]
         default: instrumented
       profile:
-        description: "CrashOverride chalk profile"
+        description: CrashOverride chalk profile
         type: string
         default: curiosity-tests-racecar
       racecar_run:
@@ -39,13 +39,13 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      code: ${{ steps.diff.outputs.code }}
-      digest: ${{ steps.diff.outputs.digest }}
-      validation: ${{ steps.diff.outputs.validation }}
-      umami: ${{ steps.diff.outputs.umami }}
-      consumer_prices: ${{ steps.diff.outputs.consumer_prices }}
-      desktop_config: ${{ steps.diff.outputs.desktop_config }}
-      desktop_rust: ${{ steps.diff.outputs.desktop_rust }}
+      code: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.code }}
+      digest: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.digest }}
+      validation: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.validation }}
+      umami: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.umami }}
+      consumer_prices: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.consumer_prices }}
+      desktop_config: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_config }}
+      desktop_rust: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_rust }}
     steps:
       - id: diff
         env:
