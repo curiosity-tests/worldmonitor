@@ -27,7 +27,7 @@ permissions:
 env:
   # The one variable that separates the arms: on baseline, action-checkout
   # skips its Set up Chalk step entirely.
-  CHALK_ON: ${{ github.event_name == 'workflow_dispatch' && inputs.leg != 'baseline' }}
+  CHALK_ON: ${{ inputs.leg == 'instrumented' }}
 
 run-name: "Test ${{ inputs.leg || 'push' }} ${{ inputs.racecar_run }}"
 
@@ -39,16 +39,16 @@ jobs:
       contents: read
       id-token: write
     outputs:
-      code: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.code }}
-      digest: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.digest }}
-      validation: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.validation }}
-      umami: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.umami }}
-      consumer_prices: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.consumer_prices }}
-      desktop_config: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_config }}
-      desktop_rust: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_rust }}
+      code: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.code }}
+      digest: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.digest }}
+      validation: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.validation }}
+      umami: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.umami }}
+      consumer_prices: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.consumer_prices }}
+      desktop_config: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_config }}
+      desktop_rust: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_rust }}
     steps:
       - id: diff
-        if: github.event_name != 'workflow_dispatch'
+        if: ${{ 'push' != 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -68,7 +68,7 @@ jobs:
             echo "desktop_rust=true" >> "$GITHUB_OUTPUT"
           }
           ZERO=0000000000000000000000000000000000000000
-          if [ "${{ github.event_name }}" = "push" ]; then
+          if [ "${{ 'push' }}" = "push" ]; then
             BEFORE="${{ github.event.before }}"
             if [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO" ]; then
               echo "No usable parent SHA; running every Test job."
