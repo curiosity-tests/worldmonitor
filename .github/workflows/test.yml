@@ -47,183 +47,183 @@ jobs:
       desktop_config: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_config }}
       desktop_rust: ${{ 'push' == 'workflow_dispatch' && 'true' || steps.diff.outputs.desktop_rust }}
     steps:
-      - id: diff
-        if: ${{ 'push' != 'workflow_dispatch' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Specialized jobs (desktop-rust, umami, digest, …) are path-filtered
-          # on PRs. Do the same on push to main. Forcing them true here used to
-          # compile the Tauri crate and rebuild Umami images on every merge —
-          # weather, news, embed — which is not a desktop or analytics gate.
-          # Fail open (run everything) only when we cannot see the file list:
-          # a zero parent SHA, a compare error, or GitHub's 300-file cap.
-          emit_all_true() {
-            echo "code=true" >> "$GITHUB_OUTPUT"
-            echo "digest=true" >> "$GITHUB_OUTPUT"
-            echo "validation=true" >> "$GITHUB_OUTPUT"
-            echo "umami=true" >> "$GITHUB_OUTPUT"
-            echo "consumer_prices=true" >> "$GITHUB_OUTPUT"
-            echo "desktop_config=true" >> "$GITHUB_OUTPUT"
-            echo "desktop_rust=true" >> "$GITHUB_OUTPUT"
-          }
-          ZERO=0000000000000000000000000000000000000000
-          if [ "${{ 'push' }}" = "push" ]; then
-            BEFORE="${{ github.event.before }}"
-            if [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO" ]; then
-              echo "No usable parent SHA; running every Test job."
-              emit_all_true
-              exit 0
-            fi
-            if ! FILES=$(gh api "repos/${{ github.repository }}/compare/${BEFORE}...${{ github.sha }}" \
-              --jq '.files[]?.filename'); then
-              echo "Compare API failed; running every Test job."
-              emit_all_true
-              exit 0
-            fi
-            FILE_COUNT=$(printf '%s\n' "$FILES" | grep -c . || true)
-            if [ "$FILE_COUNT" -ge 300 ]; then
-              echo "Compare listing is truncated at 300 files; running every Test job."
-              emit_all_true
-              exit 0
-            fi
-          else
-            FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.number }}/files" \
-              --paginate --jq '.[].filename')
+    - id: diff
+      if: ${{ 'push' != 'workflow_dispatch' }}
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Specialized jobs (desktop-rust, umami, digest, …) are path-filtered
+        # on PRs. Do the same on push to main. Forcing them true here used to
+        # compile the Tauri crate and rebuild Umami images on every merge —
+        # weather, news, embed — which is not a desktop or analytics gate.
+        # Fail open (run everything) only when we cannot see the file list:
+        # a zero parent SHA, a compare error, or GitHub's 300-file cap.
+        emit_all_true() {
+          echo "code=true" >> "$GITHUB_OUTPUT"
+          echo "digest=true" >> "$GITHUB_OUTPUT"
+          echo "validation=true" >> "$GITHUB_OUTPUT"
+          echo "umami=true" >> "$GITHUB_OUTPUT"
+          echo "consumer_prices=true" >> "$GITHUB_OUTPUT"
+          echo "desktop_config=true" >> "$GITHUB_OUTPUT"
+          echo "desktop_rust=true" >> "$GITHUB_OUTPUT"
+        }
+        ZERO=0000000000000000000000000000000000000000
+        if [ "${{ 'push' }}" = "push" ]; then
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "$ZERO" ]; then
+            echo "No usable parent SHA; running every Test job."
+            emit_all_true
+            exit 0
           fi
-          CODE=$(echo "$FILES" | awk '
-            /^docs\/research\/seo-ai-visibility\// { count++; next }
-            # Committed resilience acceptance artifacts are docs-path data that
-            # tests/dry-run-resilience-education-flip.test.mts validates —
-            # recomputing gates, checking provenance, and rejecting a
-            # self-declared verdict. That validator lives in the `unit` job, so
-            # without this rule the guard skips on exactly the PR that commits
-            # an artifact and can only ever fire on unrelated changes.
-            /^docs\/snapshots\/resilience-.*-acceptance-.*\.json$/ { count++; next }
-            # Per-service OpenAPI specs are generated machine artifacts consumed
-            # by tests/openapi-filter-param-schemas.test.mjs, which enumerates
-            # every JSON spec. Keep the JSON/YAML siblings on the same `unit`
-            # job when a PR changes only docs/api output (#6650).
-            /^docs\/api\/[^\/]+Service\.openapi\.(json|yaml)$/ { count++; next }
-            # The generated OpenAPI bundle sits under docs/ but is the INPUT to
-            # the served public/openapi.json. Its <= 950,000-byte scanner guard
-            # (tests/openapi-json-dedup.test.mjs) and the capacity report that
-            # tracks the approach to it both run in `unit`, so without this
-            # carve-out a PR that only regenerates the bundle sets code=false
-            # and skips the one gate that measures the artifact it changed
-            # (#6558).
-            /^docs\/api\/worldmonitor\.openapi\.yaml$/ { count++; next }
-            # The Data Coverage block in public/ai-search.md is generated from
-            # the inventory registries, and the docs-stats volatile-claim gate
-            # exempts that block precisely because
-            # tests/ai-search-product-facts.test.mjs fails when it drifts from
-            # the generator. That test lives in the `unit` job, so without this
-            # rule the only gate on a fabricated figure skips on exactly the PR
-            # that edits the file (#6038). NOTE: no apostrophes in this awk
-            # program - it is single-quoted in the shell, so one would end it.
-            /^public\/ai-search\.md$/ { count++; next }
-            # A published ranking snapshot is the source of the ranked-country
-            # figure and captured date in public/ai-search.md. A snapshot-only
-            # PR would otherwise set code=false, skip the byte test, and land a
-            # snapshot whose figures the committed page no longer matches -
-            # surfacing later as a confusing failure on an unrelated PR.
-            /^docs\/snapshots\/resilience-ranking-[0-9-]+\.json$/ { count++; next }
-            /\.md$/ { next }
-            /^docs\// { next }
-            /^src-tauri\// && $0 !~ /^src-tauri\/sidecar\// && $0 !~ /^src-tauri\/.*\.json$/ { next }
-            /^CHANGELOG\.md$/ { next }
-            /^LICENSE$/ { next }
-            /^\.github\/workflows\/docker-publish\.yml$/ { next }
-            { count++ }
-            END { print count + 0 }
-          ')
-          echo "code=$( [ "$CODE" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          # digest-image job: build Dockerfile.digest-notifications when a PR
-          # touches its inputs (scripts/, shared/, server/_shared/, api/, the
-          # Dockerfile itself, or the root package manifest). Catches the
-          # cross-directory-import + native-dep breakage class documented in
-          # tests/dockerfile-digest-notifications-imports.test.mjs.
-          DIGEST=$(echo "$FILES" | awk '
-            /^(scripts\/|shared\/|server\/_shared\/|api\/|\.dockerignore$|Dockerfile\.digest-notifications|package\.json|package-lock\.json)/ { count++ }
-            END { print count + 0 }
-          ')
-          echo "digest=$( [ "$DIGEST" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          # resilience-validation-smoke job: run the no-secrets artifact/schema
-          # and script-contract gate when the validation bundle, its Dockerfile,
-          # its committed artifacts, or its focused tests change.
-          VALIDATION=$(echo "$FILES" | awk '
-            /^Dockerfile\.seed-bundle-resilience-validation$/ { count++ }
-            /^docs\/methodology\/country-resilience-index\/validation\// { count++ }
-            /^package\.json$/ || /^package-lock\.json$/ { count++ }
-            /^scripts\/benchmark-resilience-external\.mjs$/ { count++ }
-            /^scripts\/backtest-resilience-outcomes\.mjs$/ { count++ }
-            /^scripts\/validate-resilience-sensitivity\.mjs$/ { count++ }
-            /^scripts\/seed-bundle-resilience-validation\.mjs$/ { count++ }
-            /^scripts\/_bundle-runner\.mjs$/ { count++ }
-            /^tests\/(resilience-validation-artifacts-schema|benchmark-resilience-external|backtest-resilience-outcomes|resilience-sensitivity-v2|seed-bundle-resilience-validation)\.test\.(mjs|mts)$/ { count++ }
-            END { print count + 0 }
-          ')
-          echo "validation=$( [ "$VALIDATION" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          # Umami's database race cannot be covered by the normal no-Docker
-          # unit suite. Run a real PostgreSQL gate only when its managed image,
-          # migration, patch, or focused tests change. Do not trigger on every
-          # Test workflow edit: unit already pins the job shape, and rebuilding
-          # two Umami images is the cost that made this look like a per-PR tax.
-          UMAMI=$(echo "$FILES" | awk '
-            /^\.dockerignore$/ { count++ }
-            /^Dockerfile\.umami$/ { count++ }
-            /^Dockerfile\.umami-retention$/ { count++ }
-            /^docker\/umami\// { count++ }
-            /^scripts\/umami-retention\.sql$/ { count++ }
-            /^tests\/umami-(runtime-remediation\.test|postgres-integration|runtime-write-probe)\.mjs$/ { count++ }
-            END { print count + 0 }
-          ')
-          echo "umami=$( [ "$UMAMI" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          # Consumer-prices-core has its own lockfile and Vitest suite, so run
-          # it whenever package code, tests, or its CI definition changes.
-          CONSUMER_PRICES=$(echo "$FILES" | awk '
-            /^consumer-prices-core\// { count++ }
-            /^\.github\/workflows\/test\.yml$/ { count++ }
-            END { print count + 0 }
-          ')
-          echo "consumer_prices=$( [ "$CONSUMER_PRICES" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          # Desktop drift gates (#5902). The `code` filter above deliberately
-          # skips src-tauri/ (non-sidecar), so before these outputs existed a
-          # Rust/Tauri-config change ran zero PR CI and desktop breakage
-          # surfaced only at the next release build — months later.
-          # Any `src-tauri/**/*.json` is carved back into `code`:
-          # tests/desktop-one-binary-model.test.mjs asserts on the set of Tauri
-          # bundle configs (#5908) and runs in `unit`. Without the carve-out,
-          # adding a per-variant config would skip its own gate — and the
-          # carve-out covers every JSON path, not just `tauri*.conf.json`, so a
-          # config parked at e.g. `src-tauri/profiles/commodity.json` cannot
-          # sneak past it either.
-          # The sidecar handler bundle build lives in the `unit` job (gated on
-          # `code`), NOT here: the bundled api/{domain}/v1/[rpc].ts handlers
-          # import from src/ and server/ via the @/ alias, so the bundle's
-          # real input graph is the whole code surface, and `code` is the
-          # filter that already tracks it.
-          DESKTOP_CONFIG=$(echo "$FILES" | awk '
-            /^src-tauri\// { count++; next }
-            /^package\.json$/ { count++; next }
-            /^scripts\/repack-linux-appimage\.sh$/ { count++; next }
-            /^scripts\/check-desktop-build-env\.mjs$/ { count++; next }
-            /^scripts\/sync-desktop-version\.mjs$/ { count++; next }
-            /^scripts\/check-rust-security-floors\.mjs$/ { count++; next }
-            /^\.github\/workflows\/.*\.ya?ml$/ { count++ }
-            END { print count + 0 }
-          ')
-          echo "desktop_config=$( [ "$DESKTOP_CONFIG" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
-          # Compile the Tauri crate only when the crate itself changes.
-          # Workflow edits are covered by desktop-config (cheap) and by the
-          # unit contract that pins this job's shape — they must not pay
-          # cargo test --locked (45 min budget) the way test.yml used to.
-          DESKTOP_RUST=$(echo "$FILES" | awk '
-            /^src-tauri\/sidecar\// { next }
-            /^src-tauri\// { count++ }
-            END { print count + 0 }
-          ')
-          echo "desktop_rust=$( [ "$DESKTOP_RUST" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+          if ! FILES=$(gh api "repos/${{ github.repository }}/compare/${BEFORE}...${{ github.sha }}" \
+            --jq '.files[]?.filename'); then
+            echo "Compare API failed; running every Test job."
+            emit_all_true
+            exit 0
+          fi
+          FILE_COUNT=$(printf '%s\n' "$FILES" | grep -c . || true)
+          if [ "$FILE_COUNT" -ge 300 ]; then
+            echo "Compare listing is truncated at 300 files; running every Test job."
+            emit_all_true
+            exit 0
+          fi
+        else
+          FILES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.number }}/files" \
+            --paginate --jq '.[].filename')
+        fi
+        CODE=$(echo "$FILES" | awk '
+          /^docs\/research\/seo-ai-visibility\// { count++; next }
+          # Committed resilience acceptance artifacts are docs-path data that
+          # tests/dry-run-resilience-education-flip.test.mts validates —
+          # recomputing gates, checking provenance, and rejecting a
+          # self-declared verdict. That validator lives in the `unit` job, so
+          # without this rule the guard skips on exactly the PR that commits
+          # an artifact and can only ever fire on unrelated changes.
+          /^docs\/snapshots\/resilience-.*-acceptance-.*\.json$/ { count++; next }
+          # Per-service OpenAPI specs are generated machine artifacts consumed
+          # by tests/openapi-filter-param-schemas.test.mjs, which enumerates
+          # every JSON spec. Keep the JSON/YAML siblings on the same `unit`
+          # job when a PR changes only docs/api output (#6650).
+          /^docs\/api\/[^\/]+Service\.openapi\.(json|yaml)$/ { count++; next }
+          # The generated OpenAPI bundle sits under docs/ but is the INPUT to
+          # the served public/openapi.json. Its <= 950,000-byte scanner guard
+          # (tests/openapi-json-dedup.test.mjs) and the capacity report that
+          # tracks the approach to it both run in `unit`, so without this
+          # carve-out a PR that only regenerates the bundle sets code=false
+          # and skips the one gate that measures the artifact it changed
+          # (#6558).
+          /^docs\/api\/worldmonitor\.openapi\.yaml$/ { count++; next }
+          # The Data Coverage block in public/ai-search.md is generated from
+          # the inventory registries, and the docs-stats volatile-claim gate
+          # exempts that block precisely because
+          # tests/ai-search-product-facts.test.mjs fails when it drifts from
+          # the generator. That test lives in the `unit` job, so without this
+          # rule the only gate on a fabricated figure skips on exactly the PR
+          # that edits the file (#6038). NOTE: no apostrophes in this awk
+          # program - it is single-quoted in the shell, so one would end it.
+          /^public\/ai-search\.md$/ { count++; next }
+          # A published ranking snapshot is the source of the ranked-country
+          # figure and captured date in public/ai-search.md. A snapshot-only
+          # PR would otherwise set code=false, skip the byte test, and land a
+          # snapshot whose figures the committed page no longer matches -
+          # surfacing later as a confusing failure on an unrelated PR.
+          /^docs\/snapshots\/resilience-ranking-[0-9-]+\.json$/ { count++; next }
+          /\.md$/ { next }
+          /^docs\// { next }
+          /^src-tauri\// && $0 !~ /^src-tauri\/sidecar\// && $0 !~ /^src-tauri\/.*\.json$/ { next }
+          /^CHANGELOG\.md$/ { next }
+          /^LICENSE$/ { next }
+          /^\.github\/workflows\/docker-publish\.yml$/ { next }
+          { count++ }
+          END { print count + 0 }
+        ')
+        echo "code=$( [ "$CODE" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+        # digest-image job: build Dockerfile.digest-notifications when a PR
+        # touches its inputs (scripts/, shared/, server/_shared/, api/, the
+        # Dockerfile itself, or the root package manifest). Catches the
+        # cross-directory-import + native-dep breakage class documented in
+        # tests/dockerfile-digest-notifications-imports.test.mjs.
+        DIGEST=$(echo "$FILES" | awk '
+          /^(scripts\/|shared\/|server\/_shared\/|api\/|\.dockerignore$|Dockerfile\.digest-notifications|package\.json|package-lock\.json)/ { count++ }
+          END { print count + 0 }
+        ')
+        echo "digest=$( [ "$DIGEST" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+        # resilience-validation-smoke job: run the no-secrets artifact/schema
+        # and script-contract gate when the validation bundle, its Dockerfile,
+        # its committed artifacts, or its focused tests change.
+        VALIDATION=$(echo "$FILES" | awk '
+          /^Dockerfile\.seed-bundle-resilience-validation$/ { count++ }
+          /^docs\/methodology\/country-resilience-index\/validation\// { count++ }
+          /^package\.json$/ || /^package-lock\.json$/ { count++ }
+          /^scripts\/benchmark-resilience-external\.mjs$/ { count++ }
+          /^scripts\/backtest-resilience-outcomes\.mjs$/ { count++ }
+          /^scripts\/validate-resilience-sensitivity\.mjs$/ { count++ }
+          /^scripts\/seed-bundle-resilience-validation\.mjs$/ { count++ }
+          /^scripts\/_bundle-runner\.mjs$/ { count++ }
+          /^tests\/(resilience-validation-artifacts-schema|benchmark-resilience-external|backtest-resilience-outcomes|resilience-sensitivity-v2|seed-bundle-resilience-validation)\.test\.(mjs|mts)$/ { count++ }
+          END { print count + 0 }
+        ')
+        echo "validation=$( [ "$VALIDATION" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+        # Umami's database race cannot be covered by the normal no-Docker
+        # unit suite. Run a real PostgreSQL gate only when its managed image,
+        # migration, patch, or focused tests change. Do not trigger on every
+        # Test workflow edit: unit already pins the job shape, and rebuilding
+        # two Umami images is the cost that made this look like a per-PR tax.
+        UMAMI=$(echo "$FILES" | awk '
+          /^\.dockerignore$/ { count++ }
+          /^Dockerfile\.umami$/ { count++ }
+          /^Dockerfile\.umami-retention$/ { count++ }
+          /^docker\/umami\// { count++ }
+          /^scripts\/umami-retention\.sql$/ { count++ }
+          /^tests\/umami-(runtime-remediation\.test|postgres-integration|runtime-write-probe)\.mjs$/ { count++ }
+          END { print count + 0 }
+        ')
+        echo "umami=$( [ "$UMAMI" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+        # Consumer-prices-core has its own lockfile and Vitest suite, so run
+        # it whenever package code, tests, or its CI definition changes.
+        CONSUMER_PRICES=$(echo "$FILES" | awk '
+          /^consumer-prices-core\// { count++ }
+          /^\.github\/workflows\/test\.yml$/ { count++ }
+          END { print count + 0 }
+        ')
+        echo "consumer_prices=$( [ "$CONSUMER_PRICES" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+        # Desktop drift gates (#5902). The `code` filter above deliberately
+        # skips src-tauri/ (non-sidecar), so before these outputs existed a
+        # Rust/Tauri-config change ran zero PR CI and desktop breakage
+        # surfaced only at the next release build — months later.
+        # Any `src-tauri/**/*.json` is carved back into `code`:
+        # tests/desktop-one-binary-model.test.mjs asserts on the set of Tauri
+        # bundle configs (#5908) and runs in `unit`. Without the carve-out,
+        # adding a per-variant config would skip its own gate — and the
+        # carve-out covers every JSON path, not just `tauri*.conf.json`, so a
+        # config parked at e.g. `src-tauri/profiles/commodity.json` cannot
+        # sneak past it either.
+        # The sidecar handler bundle build lives in the `unit` job (gated on
+        # `code`), NOT here: the bundled api/{domain}/v1/[rpc].ts handlers
+        # import from src/ and server/ via the @/ alias, so the bundle's
+        # real input graph is the whole code surface, and `code` is the
+        # filter that already tracks it.
+        DESKTOP_CONFIG=$(echo "$FILES" | awk '
+          /^src-tauri\// { count++; next }
+          /^package\.json$/ { count++; next }
+          /^scripts\/repack-linux-appimage\.sh$/ { count++; next }
+          /^scripts\/check-desktop-build-env\.mjs$/ { count++; next }
+          /^scripts\/sync-desktop-version\.mjs$/ { count++; next }
+          /^scripts\/check-rust-security-floors\.mjs$/ { count++; next }
+          /^\.github\/workflows\/.*\.ya?ml$/ { count++ }
+          END { print count + 0 }
+        ')
+        echo "desktop_config=$( [ "$DESKTOP_CONFIG" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
+        # Compile the Tauri crate only when the crate itself changes.
+        # Workflow edits are covered by desktop-config (cheap) and by the
+        # unit contract that pins this job's shape — they must not pay
+        # cargo test --locked (45 min budget) the way test.yml used to.
+        DESKTOP_RUST=$(echo "$FILES" | awk '
+          /^src-tauri\/sidecar\// { next }
+          /^src-tauri\// { count++ }
+          END { print count + 0 }
+        ')
+        echo "desktop_rust=$( [ "$DESKTOP_RUST" -gt 0 ] && echo true || echo false )" >> "$GITHUB_OUTPUT"
 
   docs-stats:
     # Always-on: derives build-owned inventory facts and validates fixed or
@@ -232,85 +232,150 @@ jobs:
     # Pure Node builtins — no npm install required.
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
           # Docs page dates derive from git history; a shallow checkout would
           # resolve every file to HEAD and fail the freshness gate spuriously.
-          fetch-depth: 0
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-      - name: Generate and validate build-owned inventory facts
-        run: |
-          node scripts/generate-inventory-facts.mjs
-          node scripts/generate-inventory-facts.mjs --check
-      - name: Doc claims match code
-        run: node scripts/docs-stats.mjs --check
-      - name: Docs page dates match git history
-        run: node scripts/generate-docs-page-dates.mjs --check
-      - name: Source attribution inventory is current
-        run: node scripts/source-attribution.mjs --check
-      - name: Homepage teaser strip matches the committed pulse snapshot
+        fetch-depth: 0
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+    - name: Generate and validate build-owned inventory facts
+      run: |
+        node scripts/generate-inventory-facts.mjs
+        node scripts/generate-inventory-facts.mjs --check
+    - name: Doc claims match code
+      run: node scripts/docs-stats.mjs --check
+    - name: Docs page dates match git history
+      run: node scripts/generate-docs-page-dates.mjs --check
+    - name: Source attribution inventory is current
+      run: node scripts/source-attribution.mjs --check
+    - name: Homepage teaser strip matches the committed pulse snapshot
         # Belongs in this always-on job, not `unit`: a PR that touches only
         # docs/snapshots/ sets changes.code=false and skips `unit` entirely, so
         # the snapshot could move out from under the generated teaser strip
         # without any gate running. Pure Node builtins, no install required.
-        run: node scripts/build-welcome-teasers.mjs --check
-      - name: Every entitlement gate is classified
+      run: node scripts/build-welcome-teasers.mjs --check
+    - name: Every entitlement gate is classified
         # Fails when a new free-vs-paid gate ships without a capability id or a
         # documented exclusion (exit 1), or when the tree is missing a source the
         # sweep expects (exit 2) — a partial sweep must never certify as complete.
-        run: node scripts/generate-entitlement-crosswalk.mjs --check
+      run: node scripts/generate-entitlement-crosswalk.mjs --check
 
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   unit:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
           # The health-probe cutover gate compares the exact PR base with the
           # candidate tree. A shallow checkout would make that gate vacuous.
-          fetch-depth: 0
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            pro-test/package-lock.json
-            blog-site/package-lock.json
-      - run: npm ci
-      - name: Install blog-site deps for SEO contract tests
+        fetch-depth: 0
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: |
+          package-lock.json
+          pro-test/package-lock.json
+          blog-site/package-lock.json
+    - run: npm ci
+    - name: Install blog-site deps for SEO contract tests
         # Unit-only nested install; keeps postinstall free of blog-site.
         # Needed so blog-seo-contract can load astro.config.mjs.
-        run: npm run ci:blog-site
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.12'
-      - name: zh-TW catalogues reproduce from their Simplified source (#6555)
+      run: npm run ci:blog-site
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97   # v7.0.0
+      with:
+        python-version: '3.12'
+    - name: zh-TW catalogues reproduce from their Simplified source (#6555)
         # The zh-TW catalogues are generated from zh.json, not translated from
         # en.json, so the EN baseline in translate-locales.mjs is the wrong
         # instrument for them and reports them separately. That leaves this as
@@ -321,11 +386,11 @@ jobs:
         # Version-pinned deliberately: a different OpenCC build shifts terms no
         # override pins, and reporting both catalogues stale at once is the
         # intended loud failure rather than a silent reformat.
-        run: |
-          pip install opencc-python-reimplemented==0.1.7
-          python3 scripts/convert-zh-tw.py --check
-      - name: Enforce health-probe cutovers
-        env:
+      run: |
+        pip install opencc-python-reimplemented==0.1.7
+        python3 scripts/convert-zh-tw.py --check
+    - name: Enforce health-probe cutovers
+      env:
           # NOT github.event.pull_request.base.sha. GitHub pins that SHA when the
           # PR is opened and never advances it as main moves, but actions/checkout
           # builds refs/pull/N/merge — this PR merged onto main's CURRENT tip. So
@@ -339,23 +404,23 @@ jobs:
           # The merge commit's FIRST parent is the base tip this tree was merged
           # onto, so it tracks what is actually under test. The pre-push hook
           # compares against origin/main for the same reason.
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          PUSH_BEFORE: ${{ github.event.before }}
-        run: |
-          if [ -n "$BASE_REF" ]; then
-            if git rev-parse --verify --quiet HEAD^2 >/dev/null 2>&1; then
-              base="$(git rev-parse HEAD^1)"
-            else
-              # Unmergeable PR: checkout fell back to the head commit, whose
-              # first parent is the PR's own history, not the base branch.
-              base="origin/$BASE_REF"
-            fi
+        BASE_REF: ${{ github.event.pull_request.base.ref }}
+        PUSH_BEFORE: ${{ github.event.before }}
+      run: |
+        if [ -n "$BASE_REF" ]; then
+          if git rev-parse --verify --quiet HEAD^2 >/dev/null 2>&1; then
+            base="$(git rev-parse HEAD^1)"
           else
-            base="$PUSH_BEFORE"
+            # Unmergeable PR: checkout fell back to the head commit, whose
+            # first parent is the PR's own history, not the base branch.
+            base="origin/$BASE_REF"
           fi
-          echo "health-probe cutover base: $base"
-          node --import tsx scripts/check-health-probe-cutovers.mts "$base"
-      - name: OpenAPI bundle capacity (#6558)
+        else
+          base="$PUSH_BEFORE"
+        fi
+        echo "health-probe cutover base: $base"
+        node --import tsx scripts/check-health-probe-cutovers.mts "$base"
+    - name: OpenAPI bundle capacity (#6558)
         # The <= 950,000-byte scanner guard lives in
         # tests/openapi-json-dedup.test.mjs and stays the gate. This step
         # publishes what that guard is silent about on the way to the wall:
@@ -374,46 +439,46 @@ jobs:
         # Written to RUNNER_TEMP, not the workspace: a CI-only artifact dropped
         # in the repo root is untracked state that a later `git status` gate
         # would trip over.
-        run: node scripts/openapi-capacity-report.mjs --out "$RUNNER_TEMP/openapi-capacity.json"
-      - name: Upload OpenAPI capacity report
+      run: node scripts/openapi-capacity-report.mjs --out "$RUNNER_TEMP/openapi-capacity.json"
+    - name: Upload OpenAPI capacity report
         # `!cancelled()` rather than `always()`: an over-budget run is exactly
         # when the breakdown is worth reading, and a cancelled job has nothing
         # to say. run_attempt in the name because upload-artifact v6 rejects a
         # duplicate name within a run, which collides on the re-run someone
         # starts to chase the failure.
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: openapi-capacity-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/openapi-capacity.json
-          if-no-files-found: warn
-          retention-days: 14
-      - name: Build /pro artifacts for built-output tests
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f   # v6
+      with:
+        name: openapi-capacity-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/openapi-capacity.json
+        if-no-files-found: warn
+        retention-days: 14
+    - name: Build /pro artifacts for built-output tests
         # public/pro/ stopped being committed in #6898, so the suites that read
         # it need the same treatment dist/ already gets. Ordered before the
         # dashboard build to mirror production: root `vite build` copies
         # public/ into dist/, so /pro must exist by then.
-        run: npm run build:pro
-      - name: Build dashboard artifacts for built-output tests
-        run: VITE_VARIANT=full ./node_modules/.bin/vite build
-      - name: Client bundle size budget (#7111, #7119)
+      run: npm run build:pro
+    - name: Build dashboard artifacts for built-output tests
+      run: VITE_VARIANT=full ./node_modules/.bin/vite build
+    - name: Client bundle size budget (#7111,   #7119)
         # The dashboard JS payload grew +151 KB in five weeks with no CI
         # signal. Compares the build above against the committed snapshots in
         # scripts/shared/bundle-budgets*.json; on an intended size change run
         # the matching `npm run bundle:budgets*` command against the same build
         # and commit the diff. Ordered before the suite so a budget breach costs
         # seconds, not the full test:data run.
-        run: |
-          npm run bundle:check
-          npm run bundle:check:pro
-          npm run bundle:check:embed
-      - run: WM_EXPECT_BUILT_OUTPUT=1 npm run test:data
-      - name: Edge function bundle check
+      run: |
+        npm run bundle:check
+        npm run bundle:check:pro
+        npm run bundle:check:embed
+    - run: WM_EXPECT_BUILT_OUTPUT=1 npm run test:data
+    - name: Edge function bundle check
         # Shared checker with caller-specific profiles. Tracked files are the
         # deployable contract, so ignored Node sidecar bundles left by local
         # builds are never inputs.
-        run: node scripts/check-edge-function-bundles.mjs --caller=ci
-      - name: Sidecar handler bundles build (#5902)
+      run: node scripts/check-edge-function-bundles.mjs --caller=ci
+    - name: Sidecar handler bundles build (#5902)
         # The desktop sidecar loads esbuild-bundled api/{domain}/v1/[rpc].js
         # handlers whose import graph spans src/ and server/ (via the @/
         # alias) — before this step, that build ran only inside release
@@ -421,59 +486,207 @@ jobs:
         # count assertion guards the vacuous-pass case: the build script
         # exits 0 when its glob finds zero entry points, so "green" must
         # also mean "every discovered domain actually produced a bundle".
-        run: |
-          node scripts/build-sidecar-sebuf.mjs
-          node scripts/build-sidecar-handlers.mjs
-          node -e '
-            const { readdirSync, existsSync } = require("node:fs");
-            const domains = readdirSync("api", { withFileTypes: true })
-              .filter((d) => d.isDirectory() && !["[domain]", "[[...path]]"].includes(d.name))
-              .filter((d) => existsSync(`api/${d.name}/v1/[rpc].ts`))
-              .map((d) => d.name);
-            const missing = domains.filter((d) => !existsSync(`api/${d}/v1/[rpc].js`));
-            if (domains.length === 0) {
-              console.error("::error::sidecar handler build found ZERO api/{domain}/v1/[rpc].ts entry points — the discovery glob is broken (vacuous pass)");
-              process.exit(1);
-            }
-            if (missing.length > 0) {
-              console.error(`::error::sidecar handler build produced no bundle for: ${missing.join(", ")}`);
-              process.exit(1);
-            }
-            console.log(`sidecar handler bundles ok: ${domains.length} domains`);
-          '
-      - name: Desktop build env parity (#5905)
+      run: |
+        node scripts/build-sidecar-sebuf.mjs
+        node scripts/build-sidecar-handlers.mjs
+        node -e '
+          const { readdirSync, existsSync } = require("node:fs");
+          const domains = readdirSync("api", { withFileTypes: true })
+            .filter((d) => d.isDirectory() && !["[domain]", "[[...path]]"].includes(d.name))
+            .filter((d) => existsSync(`api/${d.name}/v1/[rpc].ts`))
+            .map((d) => d.name);
+          const missing = domains.filter((d) => !existsSync(`api/${d}/v1/[rpc].js`));
+          if (domains.length === 0) {
+            console.error("::error::sidecar handler build found ZERO api/{domain}/v1/[rpc].ts entry points — the discovery glob is broken (vacuous pass)");
+            process.exit(1);
+          }
+          if (missing.length > 0) {
+            console.error(`::error::sidecar handler build produced no bundle for: ${missing.join(", ")}`);
+            process.exit(1);
+          }
+          console.log(`sidecar handler bundles ok: ${domains.length} domains`);
+        '
+    - name: Desktop build env parity (#5905)
         # Twin of the desktop-config leg: here it fires when src/ gains a new
         # import.meta.env.VITE_ read (code=true), forcing the author to
         # classify it for desktop builds before it can silently miss them.
-        run: node scripts/check-desktop-build-env.mjs
+      run: node scripts/check-desktop-build-env.mjs
 
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   consumer-prices:
     needs: changes
     if: needs.changes.outputs.consumer_prices == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+        cache-dependency-path: consumer-prices-core/package-lock.json
+    - run: npm ci --prefix consumer-prices-core
+    - run: npm test --prefix consumer-prices-core
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-          cache-dependency-path: consumer-prices-core/package-lock.json
-      - run: npm ci --prefix consumer-prices-core
-      - run: npm test --prefix consumer-prices-core
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
 
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   umami-postgres:
     needs: changes
     if: needs.changes.outputs.umami == 'true'
@@ -487,71 +700,136 @@ jobs:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
         ports:
-          - 5432:5432
+        - 5432:5432
         options: >-
           --health-cmd "pg_isready --username=postgres --dbname=umami_integration"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+    - name: Install PostgreSQL client
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes postgresql-client
+    - name: Build managed Umami images
+      run: |
+        docker build --file Dockerfile.umami --tag worldmonitor/umami:ci .
+        docker build --file Dockerfile.umami-retention --tag worldmonitor/umami-retention:ci .
+    - name: Exercise Umami migration and concurrent upserts
+      env:
+        UMAMI_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/umami_integration
+      run: node tests/umami-postgres-integration.mjs
+    - name: Probe the running image's write path (identify, concurrent upsert, event)
+      env:
+        UMAMI_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/umami_integration
+      run: node tests/umami-runtime-write-probe.mjs
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-      - name: Install PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes postgresql-client
-      - name: Build managed Umami images
-        run: |
-          docker build --file Dockerfile.umami --tag worldmonitor/umami:ci .
-          docker build --file Dockerfile.umami-retention --tag worldmonitor/umami-retention:ci .
-      - name: Exercise Umami migration and concurrent upserts
-        env:
-          UMAMI_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/umami_integration
-        run: node tests/umami-postgres-integration.mjs
-      - name: Probe the running image's write path (identify, concurrent upsert, event)
-        env:
-          UMAMI_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/umami_integration
-        run: node tests/umami-runtime-write-probe.mjs
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
 
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   sidecar:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run test:sidecar
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+    - run: npm ci
+    - run: npm run test:sidecar
 
   # Desktop drift gates (#5902): path-conditional so unrelated PRs skip them
   # (deploy-gate counts "skipped" as passing). desktop-config is the cheap
@@ -561,189 +839,550 @@ jobs:
   # import graph).
   # desktop-rust compiles and unit-tests the Tauri crate, which was
   # previously untested until a release build.
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   desktop-config:
     needs: changes
     if: needs.changes.outputs.desktop_config == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-      - name: Desktop version consistency
-        run: |
-          node scripts/sync-desktop-version.mjs --check || {
-            echo '::error::Desktop versions out of sync — run `npm run version:sync` and commit the result.'
-            exit 1
-          }
-      - name: Linux AppImage post-processing script parses
-        run: bash -n scripts/repack-linux-appimage.sh
-      - name: Desktop build env parity (#5905)
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+    - name: Desktop version consistency
+      run: |
+        node scripts/sync-desktop-version.mjs --check || {
+          echo '::error::Desktop versions out of sync — run `npm run version:sync` and commit the result.'
+          exit 1
+        }
+    - name: Linux AppImage post-processing script parses
+      run: bash -n scripts/repack-linux-appimage.sh
+    - name: Desktop build env parity (#5905)
         # A VITE_ key missing from the Tauri build steps silently disables the
         # capability in every shipped build (sign-in, Pro, Cyber Threats were
         # all dark this way). Also runs in `unit`: this leg is the one that
         # fires for src-tauri/ Rust and capability edits, which the `code`
         # filter skips (it carves back only `tauri*.conf.json`), while the unit
         # leg covers new import.meta.env.VITE_ reads added under src/.
-        run: node scripts/check-desktop-build-env.mjs
-      - name: Tauri config and capability files parse
+      run: node scripts/check-desktop-build-env.mjs
+    - name: Tauri config and capability files parse
         # One desktop binary ships (#5908), so there is exactly one tauri conf —
         # the per-variant `tauri.tech/finance.conf.json` files were retired with
         # the build legs that never published them. The floor still guards the
         # vacuous-pass case where a broken glob finds nothing to validate.
-        run: |
-          node -e '
-            const { readFileSync, readdirSync } = require("node:fs");
-            const confs = readdirSync("src-tauri").filter((f) => /^tauri.*\.conf\.json$/.test(f));
-            const capabilities = readdirSync("src-tauri/capabilities");
-            const files = [
-              ...confs.map((f) => `src-tauri/${f}`),
-              ...capabilities.map((f) => `src-tauri/capabilities/${f}`),
-            ];
-            if (confs.length !== 1 || capabilities.length < 3) {
-              console.error(`::error::expected exactly 1 tauri conf file (one published binary, #5908) and at least 3 capability files, found ${confs.length} conf + ${capabilities.length} capabilities: ${files.join(", ")}`);
-              process.exit(1);
+      run: |
+        node -e '
+          const { readFileSync, readdirSync } = require("node:fs");
+          const confs = readdirSync("src-tauri").filter((f) => /^tauri.*\.conf\.json$/.test(f));
+          const capabilities = readdirSync("src-tauri/capabilities");
+          const files = [
+            ...confs.map((f) => `src-tauri/${f}`),
+            ...capabilities.map((f) => `src-tauri/capabilities/${f}`),
+          ];
+          if (confs.length !== 1 || capabilities.length < 3) {
+            console.error(`::error::expected exactly 1 tauri conf file (one published binary, #5908) and at least 3 capability files, found ${confs.length} conf + ${capabilities.length} capabilities: ${files.join(", ")}`);
+            process.exit(1);
+          }
+          let failed = false;
+          for (const f of files) {
+            try {
+              JSON.parse(readFileSync(f, "utf8"));
+              console.log(`ok ${f}`);
+            } catch (e) {
+              console.error(`::error file=${f}::invalid JSON in ${f}: ${e.message}`);
+              failed = true;
             }
-            let failed = false;
-            for (const f of files) {
-              try {
-                JSON.parse(readFileSync(f, "utf8"));
-                console.log(`ok ${f}`);
-              } catch (e) {
-                console.error(`::error file=${f}::invalid JSON in ${f}: ${e.message}`);
-                failed = true;
-              }
-            }
-            if (failed) process.exit(1);
-          '
-      - name: Rust dependency security floors (#5518)
+          }
+          if (failed) process.exit(1);
+        '
+    - name: Rust dependency security floors (#5518)
         # Cargo.lock decides what actually ships; the manifest constraint only
         # bounds resolution. Nothing else in CI inspects it (security-audit
         # covers npm lockfiles only), so without this a cargo update could
         # silently drop the desktop app back onto a crate version with a known
         # advisory.
-        run: node scripts/check-rust-security-floors.mjs
+      run: node scripts/check-rust-security-floors.mjs
 
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   desktop-rust:
     needs: changes
     if: needs.changes.outputs.desktop_rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
-        with:
-          toolchain: stable
-      - name: Rust cache
-        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
-        with:
-          workspaces: './src-tauri -> target'
-          cache-on-failure: true
-      - name: Install Linux system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
-            librsvg2-dev \
-            patchelf
-      - name: cargo test
-        working-directory: src-tauri
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - name: Install Rust stable
+      uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7
+      with:
+        toolchain: stable
+    - name: Rust cache
+      uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        workspaces: './src-tauri -> target'
+        cache-on-failure: true
+    - name: Install Linux system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          libwebkit2gtk-4.1-dev \
+          libappindicator3-dev \
+          librsvg2-dev \
+          patchelf
+    - name: cargo test
+      working-directory: src-tauri
         # tauri-build's generate_context! requires frontendDist (../dist) to
         # exist at compile time; an empty dir is sufficient for unit tests.
-        run: |
-          mkdir -p ../dist
-          cargo test --locked || {
-            echo '::error::desktop Rust tests failed — repro locally with: mkdir -p dist && cd src-tauri && cargo test --locked (the mkdir is required: tauri-build embeds ../dist at compile time).'
-            exit 1
-          }
+      run: |
+        mkdir -p ../dist
+        cargo test --locked || {
+          echo '::error::desktop Rust tests failed — repro locally with: mkdir -p dist && cd src-tauri && cargo test --locked (the mkdir is required: tauri-build embeds ../dist at compile time).'
+          exit 1
+        }
 
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   convex-tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run test:convex
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+    - run: npm ci
+    - run: npm run test:convex
 
   # DOM-behavioral gate tests (#5634). Kept OUT of the `unit` job's tsx glob:
   # the components under test import `@/services/i18n`, which uses
   # `import.meta.glob` and therefore needs a Vite pipeline, and `test:data`
   # already runs ~390 files in one tsx process.
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   dom-tests:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-      - run: npm ci
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+    - run: npm ci
       # `npm run typecheck` only covers src/, so these files would otherwise
       # never be type-checked — the first run of this config caught four real
       # type errors in them.
-      - run: npm run typecheck:dom-tests
-      - run: npm run test:dom
+    - run: npm run typecheck:dom-tests
+    - run: npm run test:dom
 
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   variant-smoke-full:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -753,35 +1392,29 @@ jobs:
     # page-error, and expected-panel invariants.
     timeout-minutes: 30
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-      - run: npm ci
-      - name: Resolve Playwright version
-        id: playwright-version
-        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Cache Playwright chromium
-        id: playwright-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-chromium-${{ steps.playwright-version.outputs.version }}
-      - run: npx playwright install --with-deps chromium
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+    - run: npm ci
+    - name: Resolve Playwright version
+      id: playwright-version
+      run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+    - name: Cache Playwright chromium
+      id: playwright-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9   # v6
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-chromium-${{ steps.playwright-version.outputs.version }}
+    - run: npx playwright install --with-deps chromium
+      if: steps.playwright-cache.outputs.cache-hit != 'true'
       # The cache restores only browser binaries (~/.cache/ms-playwright), not
       # the OS libraries --with-deps installs — and runners are fresh VMs, so a
       # cache hit on an image that no longer ships a needed lib would fail at
@@ -792,33 +1425,33 @@ jobs:
       # #6923 run 32156387036), cancelling the smoke tests before they started.
       # Cap the apt step and fall back to a full --with-deps install instead of
       # letting a stuck mirror redden the required gate.
-      - name: Install Playwright OS libraries
-        id: playwright-install-deps
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        timeout-minutes: 8
-        continue-on-error: true
-        run: npx playwright install-deps chromium
-      - name: Repair Playwright install after OS-deps timeout
-        if: steps.playwright-cache.outputs.cache-hit == 'true' && steps.playwright-install-deps.outcome == 'failure'
-        timeout-minutes: 10
-        run: |
-          set -euo pipefail
-          # Run 32161039934: GHA timed out install-deps after 8m, but apt-get
-          # (pid 2500) still held /var/lib/apt/lists/lock. The immediate
-          # --with-deps fallback then exited 100 on that lock.
-          sudo pkill -9 -f 'playwright install-deps' || true
-          sudo pkill -9 apt-get || true
-          for _ in $(seq 1 20); do
-            if command -v fuser >/dev/null 2>&1 \
-              && sudo fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
-              sleep 1
-              continue
-            fi
-            sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend
-            break
-          done
-          sudo dpkg --configure -a || true
-          npx playwright install --with-deps chromium
+    - name: Install Playwright OS libraries
+      id: playwright-install-deps
+      if: steps.playwright-cache.outputs.cache-hit == 'true'
+      timeout-minutes: 8
+      continue-on-error: true
+      run: npx playwright install-deps chromium
+    - name: Repair Playwright install after OS-deps timeout
+      if: steps.playwright-cache.outputs.cache-hit == 'true' && steps.playwright-install-deps.outcome == 'failure'
+      timeout-minutes: 10
+      run: |
+        set -euo pipefail
+        # Run 32161039934: GHA timed out install-deps after 8m, but apt-get
+        # (pid 2500) still held /var/lib/apt/lists/lock. The immediate
+        # --with-deps fallback then exited 100 on that lock.
+        sudo pkill -9 -f 'playwright install-deps' || true
+        sudo pkill -9 apt-get || true
+        for _ in $(seq 1 20); do
+          if command -v fuser >/dev/null 2>&1 \
+            && sudo fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then
+            sleep 1
+            continue
+          fi
+          sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend
+          break
+        done
+        sudo dpkg --configure -a || true
+        npx playwright install --with-deps chromium
       # One invocation for all three smoke specs: each `playwright test` run
       # boots its own vite dev server (reuseExistingServer is false), so three
       # separate steps paid three boots; the specs are independent and share
@@ -829,7 +1462,7 @@ jobs:
       # pointer event) — named explicitly because nothing in CI runs the e2e/
       # glob, and a regression guard no job invokes reports green while the
       # regression ships.
-      - run: npm run test:e2e:ci-smoke
+    - run: npm run test:e2e:ci-smoke
       # playwright.config.ts already retains a trace, a video and a screenshot
       # for every failed test (retain-on-failure) — but nothing collected them,
       # so they died with the runner and every flake in this required gate was
@@ -856,30 +1489,30 @@ jobs:
       # run_attempt is in the name because a re-run keeps the same run_id and
       # v6 rejects a duplicate artifact name within one run — that collision
       # would land exactly when someone re-runs the job to chase a flake.
-      - name: Upload ci-smoke Playwright artifacts
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: playwright-ci-smoke-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 14
-      - name: Build /pro artifacts for prehydration browser checks
+    - name: Upload ci-smoke Playwright artifacts
+      if: ${{ !cancelled() }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f   # v6
+      with:
+        name: playwright-ci-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        path: test-results/
+        if-no-files-found: ignore
+        retention-days: 14
+    - name: Build /pro artifacts for prehydration browser checks
         # public/pro/ is built output since #6898. Keep this explicit and
         # immediately before the focused spec so the browser checks cannot run
         # against missing or stale bytes from another build.
-        run: npm run build:pro
-      - name: Run fail-closed prehydration browser checks
-        id: prehydration
-        run: npm run test:e2e:prehydration
-      - name: Upload prehydration Playwright artifacts
-        if: ${{ !cancelled() && steps.prehydration.outcome != 'skipped' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: playwright-prehydration-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 14
+      run: npm run build:pro
+    - name: Run fail-closed prehydration browser checks
+      id: prehydration
+      run: npm run test:e2e:prehydration
+    - name: Upload prehydration Playwright artifacts
+      if: ${{ !cancelled() && steps.prehydration.outcome != 'skipped' }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f   # v6
+      with:
+        name: playwright-prehydration-${{ github.run_id }}-${{ github.run_attempt }}
+        path: test-results/
+        if-no-files-found: ignore
+        retention-days: 14
       # Named explicitly for the same reason as the ci-smoke set above: nothing
       # runs the e2e/ glob, so this gate reported green while never executing.
       # It reads the same public/pro/ bytes the build step above produced, and
@@ -887,71 +1520,219 @@ jobs:
       # prehydration upload rather than beside its build because
       # dashboard-build-guards.test.mjs pins that build/prehydration pair as
       # literally adjacent text.
-      - name: Run critical-CSS layout-shift gate
-        id: pro-cls
-        run: npm run test:e2e:pro-cls
+    - name: Run critical-CSS layout-shift gate
+      id: pro-cls
+      run: npm run test:e2e:pro-cls
       # Its own upload, per the rule above: Playwright clears test-results/ when
       # the next run starts, so the WebMCP step would otherwise delete this
       # gate's failure trace before anyone could read it.
-      - name: Upload critical-CSS CLS Playwright artifacts
-        if: ${{ !cancelled() && steps.pro-cls.outcome != 'skipped' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: playwright-pro-cls-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 14
+    - name: Upload critical-CSS CLS Playwright artifacts
+      if: ${{ !cancelled() && steps.pro-cls.outcome != 'skipped' }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f   # v6
+      with:
+        name: playwright-pro-cls-${{ github.run_id }}-${{ github.run_attempt }}
+        path: test-results/
+        if-no-files-found: ignore
+        retention-days: 14
       # WebMCP is exposed only by an enabled Chrome milestone. Keep this probe
       # separate from the bundled-Chromium smoke so an unavailable or stale
       # system Chrome fails the required PR job instead of silently skipping.
-      - name: Run strict WebMCP iframe smoke in Chrome
-        id: webmcp
-        run: npm run test:e2e:webmcp
+    - name: Run strict WebMCP iframe smoke in Chrome
+      id: webmcp
+      run: npm run test:e2e:webmcp
       # Gated on the WebMCP step having actually run: when ci-smoke fails this
       # step is skipped, and without the guard this upload would re-publish the
       # ci-smoke output the step above already has, under a second name.
       # embed.spec.ts attaches screenshots on success, so unlike the ci-smoke
       # artifact this one appears on green runs too — its presence is not by
       # itself a failure signal.
-      - name: Upload WebMCP Playwright artifacts
-        if: ${{ !cancelled() && steps.webmcp.outcome != 'skipped' }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: playwright-webmcp-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/
-          if-no-files-found: ignore
-          retention-days: 14
+    - name: Upload WebMCP Playwright artifacts
+      if: ${{ !cancelled() && steps.webmcp.outcome != 'skipped' }}
+      uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f   # v6
+      with:
+        name: playwright-webmcp-${{ github.run_id }}-${{ github.run_attempt }}
+        path: test-results/
+        if-no-files-found: ignore
+        retention-days: 14
 
   # The focused suite is already inside `unit` / test:data. This job exists
   # only for validation-docs PRs that skip `unit` (docs/ is carved out of
   # `code`). Running it on every code PR paid a second npm ci for the same
   # files.
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   resilience-validation-smoke:
     needs: changes
     if: needs.changes.outputs.validation == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      with:
+        node-version: '24'
+        cache: 'npm'
+    - run: npm ci
+    - run: npm run test:resilience-validation-smoke
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-        with:
-          node-version: '24'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run test:resilience-validation-smoke
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
 
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
   digest-image:
     needs: changes
     if: needs.changes.outputs.digest == 'true'
@@ -963,24 +1744,95 @@ jobs:
     # remains the load-bearing gate; this job is the integration smoke.
     timeout-minutes: 20
     steps:
-      - name: Checkout code
-        uses: crashappsec/action-checkout@main
-        with:
-          chalk: ${{ env.CHALK_ON }}
-          profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
-          observables_continue_on_error: false
-          lfs: false
-      - name: Assert instrumentation is live
-        if: env.CHALK_ON == 'true'
-        run: |
-          test -n "${CURIOSITY_ROOT:-}" || { echo "::error::CURIOSITY_ROOT unset - observables never installed"; exit 1; }
-          test -S "${CURIOSITY_SOCKET_NAME:?socket name unset}" || { echo "::error::co-hostd socket absent"; exit 1; }
-
-      - name: Build digest-notifications image (smoke)
+    - name: Checkout code
+      uses: crashappsec/action-checkout@main
+      with:
+        chalk: ${{ env.CHALK_ON }}
+        profile: ${{ inputs.profile || 'curiosity-tests-racecar' }}
+        observables_continue_on_error: false
+        lfs: false
+    - name: Build digest-notifications image (smoke)
         # No push, no tag publish. Catches cross-directory-import breakage
         # before it reaches main. Pairs with the BFS import test in
         # tests/dockerfile-digest-notifications-imports.test.mjs — that test
         # walks the import graph statically; this job actually executes the
         # COPY+install steps and surfaces native-dep / package-lock issues
         # the static walk can't see.
-        run: docker build -f Dockerfile.digest-notifications -t wm-digest .
+      run: docker build -f Dockerfile.digest-notifications -t wm-digest .
+    - name: Check observables and crashes
+      if: always() && env.CHALK_ON == 'true'
+      shell: bash
+      run: |
+        set -uo pipefail
+        root="${CURIOSITY_ROOT:-}"
+        home="${CURIOSITY_HOME:-/mnt/curiosity}"
+        obs="${home}/observables"
+        fail=0
+
+        echo "::group::curiosity layout"
+        echo "CURIOSITY_ROOT=${root:-<unset>}"
+        echo "CURIOSITY_HOME=${home}"
+        ls -la "${obs}" 2>/dev/null || echo "no observables dir at ${obs}"
+        echo "::endgroup::"
+
+        # Observables for THIS run+attempt. The prefix matters: a stale file from an
+        # earlier run on the same mount would otherwise pass.
+        prefix="${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+        shopt -s nullglob
+        mine=("${obs}/${prefix}"*)
+        if [ ${#mine[@]} -eq 0 ]; then
+          mine=("${obs}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-observables"*)
+        fi
+        if [ ${#mine[@]} -eq 0 ]; then
+          echo "::error::no observables for run ${prefix} in ${obs} - instrumentation produced nothing"
+          fail=1
+        else
+          echo "observables present: ${#mine[@]} file(s)"
+          printf '  %s\n' "${mine[@]}"
+        fi
+
+        for f in "${mine[@]}"; do
+          case "$f" in
+            *.jsonl|*.json|*.combined)
+              if ! jq --slurp "." "$f" > /dev/null 2>&1; then
+                echo "::error::observables do not parse: $f"
+                fail=1
+              fi
+              ;;
+          esac
+        done
+
+        # Crash thresholds copied from check-run: a few null frames are noise, more than
+        # five is a stack walk into nothing.
+        for f in "${root}"/log/co-host*.log "${home}"/log/co-host*.log; do
+          [ -f "$f" ] || continue
+          echo "Asserting that there is no crash in $f"
+          if [ "$(grep -c 'p 00000000' "$f" 2>/dev/null || echo 0)" -gt 5 ] \
+            || [ "$(grep -E -c 'FATAL: Uncaught signal|Address not mapped at|RAX 0x.*RBX 0x' "$f" 2>/dev/null || echo 0)" -gt 1 ]; then
+            echo "::error::crash signature in $f"
+            grep -E 'FATAL: Uncaught signal|Address not mapped at' "$f" | head -5 || true
+            fail=1
+          fi
+        done
+
+        cores=("${root}"/coredump.* "${home}"/coredump.*)
+        if [ ${#cores[@]} -gt 0 ]; then
+          echo "::error::coredump present: ${cores[*]}"
+          fail=1
+        fi
+
+        for f in "${root}"/runc.log "${root}"/runc.global.log \
+                 "${home}"/runc.log "${home}"/runc.global.log; do
+          [ -f "$f" ] || continue
+          if grep -q '^E:' "$f"; then
+            echo "::error::error in $f"
+            grep '^E:' "$f" | head -5
+            fail=1
+          fi
+        done
+
+        if [ "$fail" -ne 0 ]; then
+          echo "::error::instrumentation check FAILED"
+          exit 1
+        fi
+        echo "instrumentation check passed"
