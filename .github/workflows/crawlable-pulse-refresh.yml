@@ -13,8 +13,6 @@ name: Refresh Crawlable Live Pulse
 # Mirrors .github/workflows/resilience-snapshot-refresh.yml.
 
 on:
-  schedule:
-    - cron: '41 4 * * 1'
   workflow_dispatch:
 
 permissions:

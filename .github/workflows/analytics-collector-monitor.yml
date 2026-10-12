@@ -6,8 +6,6 @@ name: Analytics Collector Monitor
 # which is exactly how a 4-day analytics blackout went unnoticed (#5565).
 
 on:
-  schedule:
-    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 permissions:

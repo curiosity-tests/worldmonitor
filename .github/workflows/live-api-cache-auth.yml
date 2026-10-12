@@ -63,8 +63,6 @@ on:
     paths:
       - 'tests/live-api-cache-auth-regression.test.mjs'
       - '.github/workflows/live-api-cache-auth.yml'
-  schedule:
-    - cron: '47 */6 * * *'
   workflow_dispatch:
 
 permissions:
